@@ -9,9 +9,18 @@ import io.sarl.airsim.influences.Takeoff
 import io.sarl.airsim.perceptions.MultirotorStatePerception
 import io.sarl.airsim.perceptions.sim.SimGroundTruthKinematicsPerception
 import io.sarl.airsim.perceptions.sim.SimPosePerception
-import io.sarl.airsim.simulation.influence.BatchedInfluenceReactionStrategy
 import io.sarl.airsim.simulation.allocation.FcfsFixedSizePoolAllocationStrategy
+import io.sarl.airsim.simulation.capacities.MultirotorSimulationControlCapacity
+import io.sarl.airsim.simulation.capacities.MultirotorSimulationPerceptionCapacity
+import io.sarl.airsim.simulation.capacities.SimulationControlCapacity
+import io.sarl.airsim.simulation.capacities.SimulationPerceptionCapacity
+import io.sarl.airsim.simulation.events.SimulationInitialized
+import io.sarl.airsim.simulation.influence.BatchedInfluenceReactionStrategy
 import io.sarl.airsim.simulation.scheduling.SimulationStrategy
+import io.sarl.airsim.simulation.skills.airsim.AirSimMultirotorControl
+import io.sarl.airsim.simulation.skills.airsim.AirSimMultirotorSimulationPerception
+import io.sarl.airsim.simulation.skills.airsim.AirSimSimulationControl
+import io.sarl.airsim.simulation.skills.airsim.AirSimSimulationPerception
 import io.sarl.airsim.utils.ActiveWaitLock
 import io.sarl.core.DefaultContextInteractions
 import io.sarl.core.Initialize
@@ -22,18 +31,7 @@ import java.util.Collections
 import org.msgpack.rpc.Client
 import org.msgpack.rpc.loop.EventLoop
 
-import static io.sarl.airsim.simulation.scheduling.FixedStepSimulationStrategy.fixedStepSimulationStrategy
 import static io.sarl.airsim.simulation.scheduling.FixedStepBlockingSimulationStrategy.fixedStepBlockingSimulationStrategy
-import io.sarl.airsim.simulation.events.SimulationInitialized
-import io.sarl.airsim.simulation.influence.InfluenceReactionStrategy
-import io.sarl.airsim.simulation.capacities.SimulationControlCapacity
-import io.sarl.airsim.simulation.skills.airsim.AirSimSimulationControl
-import io.sarl.airsim.simulation.capacities.MultirotorSimulationControlCapacity
-import io.sarl.airsim.simulation.skills.airsim.AirSimMultirotorControl
-import io.sarl.airsim.simulation.capacities.SimulationPerceptionCapacity
-import io.sarl.airsim.simulation.skills.airsim.AirSimSimulationPerception
-import io.sarl.airsim.simulation.capacities.MultirotorSimulationPerceptionCapacity
-import io.sarl.airsim.simulation.skills.airsim.AirSimMultirotorSimulationPerception
 
 /**
  * Agent in charge of controlling the simulation, transmitting the influences and
@@ -55,7 +53,11 @@ agent SimulationControllerAgent {
 	/** The simulation step */
 	val simulationStepMs = 200.0f
 
-	val pool = newLinkedList("S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9")
+	// val pool = newLinkedList("S0", "S1", "S2", "S3", "S4", "S5")
+	val pool = newLinkedList("S0", "S1", "S2", "S3", "S4")
+	//val pool = newLinkedList("S0", "S1", "S2")
+	//val pool = newLinkedList("Alpha", "Bravo", "Charly", "Delta")
+	
 	val affectationStrategy =
 			new FcfsFixedSizePoolAllocationStrategy([|
 				val pool = pool
@@ -129,14 +131,16 @@ agent SimulationControllerAgent {
 		// Schedule the loop
 		atFixedDelay(simulationStepMs.longValue)[ simulationStrategy.loop ]
 		
-		in(2000) [ info("Sending the initialized simulation signal") emit(new SimulationInitialized) ]
+		in(10000) [ info("Sending the initialized simulation signal") emit(new SimulationInitialized) ]
 	}
 	
 	/**
 	 * When a drone emits the take-off instruction, transfers it to AirSim
 	 */
 	on Takeoff {
+		info("Take off")
 		val body = affectationStrategy.affectOrGetBody(occurrence.source, [a, n|onAffectation(a, n)])
+		info("Body: " + body)
 		influenceReactionStrategy.influenceReceived(occurrence.source) [
 			info("Propagation of takeoff for " + body)
 

@@ -44,44 +44,48 @@ class BatchedInfluenceReactionStrategy implements InfluenceReactionStrategy {
 	}
 	
 	def perceptionReceived(destination : Address, propagate : Procedure0) {
-		if(!this.perceptions.containsKey(destination))
-			this.perceptions.put(destination, new LinkedBlockingQueue)
+		synchronized(this.perceptions) {
+			if(!this.perceptions.containsKey(destination))
+				this.perceptions.put(destination, new LinkedBlockingQueue)
+				
+			this.perceptions.get(destination).add(propagate)
 			
-		this.perceptions.get(destination).add(propagate)
-		
-		if(this.perceptionPropagationCondition.apply(System.currentTimeMillis - this.lastPerceptionPropagationTimeMs, this.perceptions.keySet)) {
-			this.perceptions.values.forEach[ it.forEach [it.apply] ]
-			this.perceptions.clear
-			this.lastPerceptionPropagationTimeMs = System.currentTimeMillis
-			firePerceptionsPropagated
+			if(this.perceptionPropagationCondition.apply(System.currentTimeMillis - this.lastPerceptionPropagationTimeMs, this.perceptions.keySet)) {
+				this.perceptions.values.forEach[ it.forEach [it.apply] ]
+				this.perceptions.clear
+				this.lastPerceptionPropagationTimeMs = System.currentTimeMillis
+				firePerceptionsPropagated
+			}
 		}
 	}
 	
 	def influenceReceived(source : Address, propagate : Procedure0) {
-		if(!this.influences.containsKey(source))
-			this.influences.put(source, new LinkedBlockingQueue)
-		
-		// If there are too much influences for a single emitter, we apply the "buffer overflow" policy
-		if (this.influenceBufferSize > 0 && this.influences.get(source).size() >= this.influenceBufferSize) {
-			if (this.influenceDropOld) {
-				// If we drop the old influences, we poll the oldest
-				this.influences.get(source).poll	
-			} else {
-				// If we keep the old influences, we ignore the new one, but we keep evaluating the propagation condition
-				// which needs to be evaluated everytime an influence is emitted
+		synchronized(this.influences) {
+			if(!this.influences.containsKey(source))
+				this.influences.put(source, new LinkedBlockingQueue)
+			
+			// If there are too much influences for a single emitter, we apply the "buffer overflow" policy
+			if (this.influenceBufferSize > 0 && this.influences.get(source).size() >= this.influenceBufferSize) {
+				if (this.influenceDropOld) {
+					// If we drop the old influences, we poll the oldest
+					this.influences.get(source).poll	
+				} else {
+					// If we keep the old influences, we ignore the new one, but we keep evaluating the propagation condition
+					// which needs to be evaluated everytime an influence is emitted
+				}
 			}
-		}
-		
-		this.influences.get(source).add(propagate)
-		
-		if (this.influencePropagationCondition.apply(System.currentTimeMillis - this.lastInfluencePropagationTimeMs,
-			this.influences.keySet)) {
-			this.influences.values.forEach[it.forEach[it.apply]]
-			this.influences.clear
-			this.lastInfluencePropagationTimeMs = System.currentTimeMillis
-			fireInfluencesPropagated
-		} else {
-			// Failed
+			
+			this.influences.get(source).add(propagate)
+			
+			if (this.influencePropagationCondition.apply(System.currentTimeMillis - this.lastInfluencePropagationTimeMs,
+				this.influences.keySet)) {
+				this.influences.values.forEach[it.forEach[it.apply]]
+				this.influences.clear
+				this.lastInfluencePropagationTimeMs = System.currentTimeMillis
+				fireInfluencesPropagated
+			} else {
+				// Failed
+			}
 		}
 	}
 	

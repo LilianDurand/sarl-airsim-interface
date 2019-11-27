@@ -157,6 +157,14 @@ class Vector3 implements Vector<Vector3> {
 	override norm() : Float {
 		return this.norm
 	}
+	
+	/**
+	 * Gets the normalized vector
+	 * @return vector normalized
+	 */
+	 def normalize():Vector3{
+	 	return this*(1/this.norm)
+	 }
 
 	/** 
 	 * Converts this to a Vector2 (excluding the Z coordinate)

@@ -3,23 +3,27 @@
  */
 package io.sarl.airsim.behaviors.target
 
+import io.sarl.airsim.filters.mean.Vector3MeanFilter
 import io.sarl.airsim.influences.MoveByVelocity
 import io.sarl.airsim.influences.Takeoff
+import io.sarl.airsim.math.Vector2
 import io.sarl.airsim.math.Vector3
 import io.sarl.airsim.math.Vector4
+import io.sarl.airsim.perceptions.sim.SimGroundTruthKinematicsPerception
 import io.sarl.airsim.perceptions.sim.SimPosePerception
+import io.sarl.airsim.simulation.events.SimulationInitialized
+import io.sarl.airsim.vo.Cone
 import io.sarl.core.DefaultContextInteractions
 import io.sarl.core.Initialize
 import io.sarl.core.Logging
 import io.sarl.core.Schedules
-import io.sarl.airsim.filters.mean.Vector3MeanFilter
-import io.sarl.airsim.simulation.events.SimulationInitialized
-import io.sarl.airsim.perceptions.sim.SimGroundTruthKinematicsPerception
+import java.util.ArrayList
+import java.util.List
 
 /** 
  * Drone behavior: defines a target point (the opposite of the start point) and try to reach this target
  * Eventually avoids obstacles 
- * @author Alexandre Lombard
+ * @author Alexandre Lombard, Lilian Durand, Rodolphe Ponthon
  * 
  */
 behavior ReachTargetPoint3D extends AbstractReachTargetPoint {
@@ -30,17 +34,19 @@ behavior ReachTargetPoint3D extends AbstractReachTargetPoint {
 	
 	val targetRadius = 1.0f
 	val startupDelayMs = 5000
-	val periodMs = 1000
-	val avoidanceRadius = 1.5f
+	val periodMs = 200
+	val avoidanceRadius = 5.0f
 	val slidingScaling = 1f
 	val attractionFactor = 15f
 	
 	val zOffset = -2.5f
 	
 	val meanFilter = new Vector3MeanFilter(6)
+	
+	var isArrived : boolean
 
 	on Initialize {
-		//
+		this.isArrived = false
 	}
 	
 	on SimulationInitialized {
@@ -48,26 +54,12 @@ behavior ReachTargetPoint3D extends AbstractReachTargetPoint {
 	}
 
 	on SimPosePerception [this.targetPoint === null] {
-		// Update the internal pose state and fix the target point if not set
-		//this.targetPoint = new Vector3(
-		//	-this.pose.position.getX(),
-		//	-this.pose.position.getY(),
-		//	this.pose.position.getZ() + zOffset) 		// We don't invert the Z, but we add an offset so it's not on the ground
 		this.targetPoint = computeTargetPoint(this.pose.position.toVector3)
 	}
 	
 	on SimGroundTruthKinematicsPerception [initialized && occurrence.state.linearVelocity.length <= 0.01f] {
-		// This happens if the computed force is directed to the ground at the beginning, emit an impulsion to the sky
-		//emit(new Takeoff)
 		emit(new MoveByVelocity(new Vector3(0.0f, 0.0f, -20.0f), periodMs / 1000.0f))
 	}
-	
-//	on MultirotorStatePerception {
-//		if(initialized && occurrence.multirotorState.landedState == LandedState.LANDED) {
-//			info("" + occurrence.multirotorState.landedState)
-//			emit(new Takeoff)
-//		}
-//	}
 	
 	def initialize {
 		info("Drone agent is starting...")
@@ -84,30 +76,20 @@ behavior ReachTargetPoint3D extends AbstractReachTargetPoint {
 						(new Vector3(this.pose.position.getX(), this.pose.position.getY(), 0.0f) -
 							new Vector3(this.targetPoint.getX(), this.targetPoint.getY(), 0.0f)).length() <
 							targetRadius && this.velocity.length() < 0.1) {
-						// If we are at the target position, and if the velocity is almost null, we reset the drone position
-						// reset()
-						// If we are at the target position, we change the target position (source becomes destination)
-						// synchronized (this.pose) {
-						//	if(this.targetPoint !== null) {
-						// if((this.targetPoint - new Vector3(this.initialPose.position)).length() < 1e-2f) {
-						// this.targetPoint = new Vector3(
-						// -this.initialPose.position.getX(),
-						// -this.initialPose.position.getY(),
-						// this.initialPose.position.getZ() + zOffset)
-						// } else {
-						// this.targetPoint = new Vector3(this.initialPose.position.getX(), this.initialPose.position.getY(), this.initialPose.position.getZ() + zOffset)
-						// }
-						//	}
-					// }
 						// For the simulation, the agent must send an influence even if it's an empty one
 						emit(new MoveByVelocity(0.0f, 0.0f, 0.0f, periodMs / 1000.0f))
+						if(!this.isArrived){
+							this.isArrived = true
+							info("Arrived")
+						}
 					} else {
 						// Note: the computed force is scaled to reduce its strength
-						val movementForce = meanFilter.filter(computeForce() * 0.1f)
-
+						val movementForce = computeForce()
+						
+						//Move the drone to the correct direction
 						emit(
 							new MoveByVelocity(movementForce.getX(), movementForce.getY(), movementForce.getZ(),
-								periodMs / 1000.0f))
+						   periodMs / 1000.0f))
 					}
 				} catch (t : Throwable) {
 					t.printStackTrace()
@@ -132,153 +114,149 @@ behavior ReachTargetPoint3D extends AbstractReachTargetPoint {
 		val position = new Vector3(this.pose.position)
 		
 		// Checking values
-		if(Double.isNaN(targetPoint.getX()) || Double.isNaN(position.getX()))
+		if(Double.isNaN(position.getX())){
 			return new Vector3()
+		}
+		if (Double.isNaN(targetPoint.getX())){
+			return new Vector3();
+		}
 			
-		// If the drone is within a given radius around its target point, we stop moving (note: this will oscillate
-		// due to inertia)
 		if((targetPoint - position).length() < targetRadius)
 			return new Vector3()
 			
-		// Find among the neighbours if there are potentials obstacles and compute the time to collision
-		var sliding: Vector3 = computeSlidingForce()
+		// 
+		var direction: Vector3 = findSafeDirection()
 
-		if(sliding === null)
-			sliding = new Vector3(0f, 0f, 0f)
+		if(direction === null)
+			direction = new Vector3(0f, 0f, 0f)
 
-		val attraction = computeAttraction((targetPoint - position).normalized(), sliding.length(), attractionFactor,
-			2.0f)
-		val result = (sliding * slidingScaling) + attraction
-		
-		if(Double.isNaN(result.x) || Double.isNaN(result.y) || Double.isNaN(result.z))
-			info(sliding)
-
-		return result
+		return direction
 	}
 
-	def computeSlidingForce(): Vector3 {
-		var sliding: Vector3 = null
+	def findSafeDirection() : Vector3 {
 
 		// Storing references to avoid async changes
 		val targetPoint = this.targetPoint
 		val position = this.pose.position
+		val maxVelocity : float = 1.5f
 
-		sliding = neighbours
-			.filter [ k, v | v.pose !== null && v.state !== null ]
-			.mapValues [
-				val selfPosition = new Vector4(position.getX(), position.getY(), position.getZ(), 0f)
-				val selfDirection = this.velocity
-				val otherPosition = new Vector4(it.pose.position.getX(), it.pose.position.getY(), it.pose.position.getZ(), 0f)
-				val otherDirection = it.state.linearVelocity
-				val otherAcceleration = it.state.linearAcceleration.toVector3
+		// List of considered velocity obstacles represented by a Cone
+		var VOs : ArrayList<Cone> = new ArrayList<Cone>()
+		
+		val temp = neighbours.filter[k, v|v.pose !== null && v.state !== null]
+		for(key : temp.keySet()){
+			val drone = temp.get(key)
+			val selfPosition = new Vector4(position.getX(), position.getY(), position.getZ(), 0f)
+			val selfDirection = this.velocity
+			val otherPosition = new Vector4(drone.pose.position.getX(), drone.pose.position.getY(),
+			drone.pose.position.getZ(),
+				0f)
+			val otherDirection = drone.state.linearVelocity
 				
-				// If some data are erroneous, we ignore them
-				if(Float.isNaN(otherPosition.getX()) || Float.isNaN(selfPosition.getX()) || Float.isNaN(otherDirection.getX()) || Float.isNaN(selfDirection.getX()))
-					return new Vector3()
-				
-				//var d = Math.abs(
-				//			otherPosition.minus(selfPosition).cross(new Vector4(selfDirection.getX(), selfDirection.getY(), selfDirection.getZ(), 1f)).dot(new Vector4(otherDirection.getX(), otherDirection.getY(), otherDirection.getZ(), 1f))) /
-				//			(new Vector4(selfDirection.getX(), selfDirection.getY(), selfDirection.getZ(), 1f).cross(new Vector4(otherDirection.getX(), otherDirection.getY(), otherDirection.getZ(), 1f)).length())
-				
-				val a0 = selfPosition
-				val b0 = otherPosition
-				val va = new Vector4(selfDirection.getX(), selfDirection.getY(), selfDirection.getZ(), 1.0f)
-				val vb = new Vector4(otherDirection.getX(), otherDirection.getY(), otherDirection.getZ(), 1.0f)
-				val a = va.squaredNorm()
-				val b = va.dot(vb)
-				val c = vb.squaredNorm()
-				val w0 = (a0 - b0)
-				val _d = va.dot(w0)
-				val e = vb.dot(w0)
-				
-				val e1 = a0 - b0
-				val e2 = va * (b * e - c * _d) - vb * (a * e - b * _d)
-				val e3 = (a * c - b * b)
-				var d = (e1 + e2 * (1.0f / e3)).norm()
+			// If some data are erroneous, we ignore them
+			if (Float.isNaN(otherPosition.getX()) || Float.isNaN(selfPosition.getX()) ||
+				Float.isNaN(otherDirection.getX()) || Float.isNaN(selfDirection.getX()))
+				continue
 
-				if(Double.isNaN(d)) {
-					// If d is NaN it means that the direction are colinear
-					// If so, the distance between the lines is the distance of a point from a line to a point
-					// of the other line 
-					//val u = new Vector4(otherDirection.getX(), otherDirection.getY(), otherDirection.getZ(), 1f)
-					//d = selfPosition.minus(otherPosition).cross(u).length() / u.length()
-					d = 0.0f	// TODO
+			var d = (selfPosition - otherPosition).norm
+
+			if (Double.isNaN(d)) {
+				d = 0.0f // TODO
 					
 					if(Double.isNaN(d)) d = 0.0f
+			}
+
+			if (d > avoidanceRadius) {
+				// The minimal distance will be above the avoidance radius so there won't be a collision
+				continue
+			} else {
+				// There may be a collision
+				var droneRadius : float = (1/Math.sqrt(2)).toFloat
+				var r = droneRadius * 2
+				var VO : Cone
+				//Calculate the velocity obstacle for the UAV
+				var tangents : List<Vector3> = findTangents(r, selfPosition.toVector3, otherPosition.toVector3)
+				VO = new Cone(selfPosition.toVector3 + otherDirection.toVector3,
+					tangents.get(0) + otherDirection.toVector3, tangents.get(1) + otherDirection.toVector3)
+				VOs.add(VO)
+			}
+		}
+			//UAV wants to go directly to the target point if possible
+			val desiredDir : Vector3 = (targetPoint - new Vector3(position.x, position.y, position.z)).normalize()*maxVelocity
+			
+			for(var theta=0; theta<90; theta+=15){
+				var radTheta = (theta * Math.PI / 180).toFloat
+				var orthV = new Vector3(desiredDir.z, desiredDir.z, desiredDir.x + desiredDir.y)
+				val quaterTheta = new Vector4(orthV.normalize, radTheta)
+				var potentialDirTheta = quaterTheta * new Vector4(desiredDir.x, desiredDir.y, desiredDir.z, 0.0f) * quaterTheta.invert
+				for(var phi = 0; phi < 180; phi+=10){
+					var radPhi = (phi * Math.PI / 180).toFloat
+					for(var i = 0; i<2; i++){
+						val quaterPhi = new Vector4(desiredDir.normalize, radPhi*(1-2*i))
+						var potentialDir = (quaterPhi * new Vector4(potentialDirTheta.x, potentialDirTheta.y, potentialDirTheta.z, 0.0f) * quaterPhi.invert).toVector3
+						var isNotInVO = true
+						for(vo : VOs){
+							var currentVO = vo
+							if(currentVO.isPointIn(position.toVector3 + potentialDir)){
+								isNotInVO = false
+								break
+							}
+						}
+						if(isNotInVO){
+							return potentialDir
+						}
+					}
 				}
-				
-				if(d > avoidanceRadius) {
-					// The minimal distance will be above the avoidance radius so there won't be a collision
-					new Vector3()
-				} else {
-					// There may be a collision
-				// val t = computeCollisionTime(d, selfPosition, selfDirection, otherPosition, otherDirection.toVector3)
-					val t = Math.min(
-						computeCollisionTime(d, selfPosition, selfDirection, otherPosition, otherDirection.toVector3),
-						computeCollisionTime(2 * avoidanceRadius, selfPosition, selfDirection, otherPosition, otherDirection.toVector3))
-
-					if(t < 1e-3f)
-						return new Vector3() // Too late, we ignore to avoid errors further
-						
-					if(t > 1e3f)
-						return new Vector3() // Too early
-					
-					val otherClosePosition = new Vector4(otherPosition.getX() + otherDirection.getX() * t, otherPosition.getY() + otherDirection.getY() * t, otherPosition.getZ() + otherDirection.getZ() * t, t)
-
-					val obstacleDirection = (otherClosePosition - selfPosition).normalized()
-					
-					if((targetPoint - selfPosition.toVector3()).dot(obstacleDirection.toVector3()) < 0.0f)
-						return new Vector3()
-					
-					// 2D avoidance strategy
-					//val slidingDirection = new Vector3(-obstacleDirection.getY(), obstacleDirection.getX(), 0.0f)
-					// Try #01 3D avoidance strategy
-					//val otu = (this.targetPoint - selfPosition.toVector3()).normalized()
-					//val vu = new Vector3(selfDirection.getX(), selfDirection.getY(), selfDirection.getZ()).normalized()
-					//val slidingDirection: Vector3 = otu.cross(vu)
-					// Try #02 3D avoidance strategy
-					val slidingDirectionXY = new Vector3(-obstacleDirection.getY(), obstacleDirection.getX(), 0.0f)
-					//val slidingDirectionXY = new Vector3()
-					val slidingDirectionXZ = new Vector3(obstacleDirection.getZ(), 0.0f, -obstacleDirection.getX())
-					val slidingDirection = (slidingDirectionXY + slidingDirectionXZ).normalized
-					
-					val slidingScale = computeSlidingScale(t, 0.25f, 6f, 10f)
-					
-					val sign = 1.0f
-					//val slidingVector = slidingDirection * slidingScale.floatValue * sign
-					
-					
-					// New strategy (the direction of the sliding force tries to minimize the deviation to the goal):
-					val PC = obstacleDirection.toVector3().normalized
-					val T = (targetPoint - selfPosition.toVector3())
-					val ProjPCT = T - PC * (T.dot(PC) / PC.norm)
-					val ProjPCTNormalized = ProjPCT.normalized
-					val slidingVector = ProjPCTNormalized * slidingScale.floatValue
-					
-					// New term: this term tries to make an agent behave differently from the other ones
-					//val ProjOtherDirection = otherDirection.toVector3 - PC * (otherDirection.toVector3.dot(PC) / PC.norm)
-					//val stabilityVector = -ProjOtherDirection.normalized *
-					//(1.0f / 5.0f * Math.pow((otherPosition.toVector3 - selfPosition.toVector3).norm, 2.0).floatValue)
-					// New term: this term introduces a repulsion between agents, the scale depends on the distance
-					//val distance = (otherPosition - selfPosition).norm
-					//val repulsion = (otherPosition - selfPosition).toVector3.normalized * (10.0f / Math.pow(distance, 2).floatValue)
-					// New term: this term introduces an up/down repulsion based on the distance
-					val distance = (otherPosition - selfPosition).norm
-					val upDownRepulsion = new Vector3(0.0f, 0.0f, selfPosition.z - otherPosition.z).normalized *
-					(27.0f / Math.pow(distance, 2.0).floatValue)
-					
-					return slidingVector + upDownRepulsion
-				}
-
-				return new Vector3()
-			]
-			.values
-			.filter[!Float.isNaN(it.getX()) && !Float.isNaN(it.getY()) && !Float.isNaN(it.getZ())]
-			.reduce[p1, p2 | new Vector3(p1.getX() + p2.getX(), p1.getY() + p2.getY(), p1.getZ() + p2.getZ())]
+			}
 		
-		return sliding
+		return new Vector3
 	}
-	
+
+	//Find tangents on a circle (center p2) from a point p1
+	def findTangents(radius : float, p1 : Vector2, p2 : Vector2) : List<Vector2> {
+		var points = new ArrayList<Vector2>()
+		val v = p1 - p2
+
+		val b = v.norm
+		var r = radius
+		if(r>b){
+			r = b
+		}
+		val th = Math.acos(r / b)
+
+		val d = Math.atan2(v.y, v.x)
+		val d1 = d + th
+		val d2 = d - th
+
+		points.add(new Vector2(p2.x + r * Math.cos(d1).toFloat, p2.y + r * Math.sin(d1).toFloat))
+		points.add(new Vector2(p2.x + r * Math.cos(d2).toFloat, p2.y + r * Math.sin(d2).toFloat))
+		
+		return points
+	}
+		
+	//Find tangents on a sphere (center p2) from a point p1
+	def findTangents(radius : float, p1 : Vector3, p2 : Vector3) : List<Vector3> {
+		var points = new ArrayList<Vector3>()
+		//project on XY-plane
+		val v = p1 - p2
+		val rotationAxis = v.cross(new Vector3(v.x, v.y, 0.0f))
+		val zAxis = new Vector3(0.0f,0.0f,1.0f)
+		val alpha = Math.asin((zAxis.dot(v)) / (zAxis.norm * v.norm)).toFloat
+		val quater = new Vector4(rotationAxis, alpha)
+		val invertQuarter = new Vector4(rotationAxis, -alpha)
+		val vOnXY = quater * new Vector4(v.x, v.y, v.z, 0.0f) * quater.invert
+		
+		//Find tangents points in 2D (XY-Plane)
+		var tangents = findTangents(radius, new Vector2(vOnXY.x, vOnXY.y), new Vector2())
+		
+		for(tangent : tangents){
+			var correctTangent = (invertQuarter * new Vector4(tangent.x, tangent.y, 0.0f, 1.0f) * invertQuarter.invert).xyz
+			points.add(p2  + correctTangent)
+		}
+		
+		return points
+	}
+
 	def computeTargetPoint(position : Vector3) {
 		val angle = 2.0 * Math.PI / 10.0
 		val symmetry = new Vector3(-position.getX(), -position.getY(), position.getZ() + zOffset)
@@ -303,32 +281,6 @@ behavior ReachTargetPoint3D extends AbstractReachTargetPoint {
 					this.initialPose.position.getZ() + zOffset)
 			}
 		}
-	}
-
-	/** 
-	 * Computes the time associated to the closest distance d of the trajectory of the drones
-	 * @param d the minimum distance between the spatio-temporal trajectories
-	 * @param selfPosition the position of this drone
-	 * @param selfDirection the direction of this drone
-	 * @param otherPosition the position of the other drone
-	 * @param otherDirection the direction of the other drone
-	 */
-	private def computeCollisionTime(d : Float, selfPosition : Vector4, selfDirection : Vector3, otherPosition : Vector4, otherDirection : Vector3) : Float {
-		val coefA = Math.pow(selfDirection.getX() - otherDirection.getX(), 2) +
-			Math.pow(selfDirection.getY() - otherDirection.getY(), 2) +
-			Math.pow(selfDirection.getZ() - otherDirection.getZ(), 2)
-		var coefB = 2f * (selfPosition.getX() - otherPosition.getX()) * (selfDirection.getX() - otherDirection.getX()) +
-			2f * (selfPosition.getY() - otherPosition.getY()) * (selfDirection.getY() - otherDirection.getY()) +
-			2f * (selfPosition.getZ() - otherPosition.getZ()) * (selfDirection.getZ() - otherDirection.getZ())
-		val coefC = -Math.pow(d, 2)
-
-		val delta = Math.pow(coefB, 2) - 4f * coefA * coefC
-		
-		if(delta < 0.0f) {
-			return Float.MAX_VALUE
-		}
-		
-		return ((-coefB + Math.sqrt(delta)) / (2 * coefA) / 2).floatValue 	// Note: I'm dividing by two but I don't know why
 	}
 }
 

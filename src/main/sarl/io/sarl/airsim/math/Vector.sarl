@@ -94,6 +94,7 @@ interface Vector<T extends Vector<T>> {
 	 * @return the product of this by the given scalar
 	 */
 	def operator_multiply(l : Float, v : T) : T
+	
 
 	/** 
 	 * Unary minus operator
