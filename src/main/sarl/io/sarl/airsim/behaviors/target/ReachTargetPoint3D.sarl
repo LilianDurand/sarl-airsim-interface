@@ -31,10 +31,11 @@ behavior ReachTargetPoint3D extends AbstractReachTargetPoint {
 	uses Logging, DefaultContextInteractions, Schedules
 	
 	var initialized = false
+	var targetPoint : Vector3
 	
 	val targetRadius = 1.0f
 	val startupDelayMs = 5000
-	val periodMs = 200
+	val periodMs = 100
 	val avoidanceRadius = 5.0f
 	val slidingScaling = 1f
 	val attractionFactor = 15f
@@ -44,9 +45,13 @@ behavior ReachTargetPoint3D extends AbstractReachTargetPoint {
 	val meanFilter = new Vector3MeanFilter(6)
 	
 	var isArrived : boolean
+	var velocityPlaned = 0.0f
 
 	on Initialize {
 		this.isArrived = false
+		this.velocityPlaned = 1.0f
+
+		this.targetPoint = occurrence.parameters.get(0) as Vector3
 	}
 	
 	on SimulationInitialized {
@@ -54,7 +59,7 @@ behavior ReachTargetPoint3D extends AbstractReachTargetPoint {
 	}
 
 	on SimPosePerception [this.targetPoint === null] {
-		this.targetPoint = computeTargetPoint(this.pose.position.toVector3)
+		//this.targetPoint = computeTargetPoint(this.pose.position.toVector3)
 	}
 	
 	on SimGroundTruthKinematicsPerception [initialized && occurrence.state.linearVelocity.length <= 0.01f] {
@@ -138,7 +143,9 @@ behavior ReachTargetPoint3D extends AbstractReachTargetPoint {
 		// Storing references to avoid async changes
 		val targetPoint = this.targetPoint
 		val position = this.pose.position
-		val maxVelocity : float = 1.5f
+		val maxVelocity : float = 3.5f
+		val minVelocity = 0.5f
+		val acceleration = 0.1f
 
 		// List of considered velocity obstacles represented by a Cone
 		var VOs : ArrayList<Cone> = new ArrayList<Cone>()
@@ -182,7 +189,8 @@ behavior ReachTargetPoint3D extends AbstractReachTargetPoint {
 			}
 		}
 			//UAV wants to go directly to the target point if possible
-			val desiredDir : Vector3 = (targetPoint - new Vector3(position.x, position.y, position.z)).normalize()*maxVelocity
+			this.velocityPlaned = Math.min(this.velocityPlaned *(1+acceleration), maxVelocity)
+			val desiredDir : Vector3 = (targetPoint - new Vector3(position.x, position.y, position.z)).normalize()*this.velocityPlaned
 			
 			for(var theta=0; theta<90; theta+=15){
 				var radTheta = (theta * Math.PI / 180).toFloat
@@ -203,7 +211,11 @@ behavior ReachTargetPoint3D extends AbstractReachTargetPoint {
 							}
 						}
 						if(isNotInVO){
-							return potentialDir
+							val finalAngle = Math.acos(Math.min(desiredDir.dot(potentialDir) / (potentialDir.norm * desiredDir.norm), 1.0f))
+							var coeff = (-Math.abs(finalAngle).toFloat / Math.PI.toFloat) + 1
+						    coeff = ((Math.exp(1.0f) * (1.0f - 1.0f / Math.exp(coeff))) / (Math.exp(1.0f) - 1.0f)).toFloat
+							this.velocityPlaned *= coeff
+							return potentialDir*coeff
 						}
 					}
 				}

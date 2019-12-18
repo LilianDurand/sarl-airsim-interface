@@ -1,0 +1,19 @@
+/** 
+ * 
+ */
+package io.sarl.airsim.simulation.events
+
+import io.sarl.airsim.math.Vector3
+
+/** 
+ * @author Lilian Durand
+ * 
+ */
+event ReachTargetPoint 
+{
+	val targetPoint : Vector3
+
+	new (targetPoint : Vector3) {
+		this.targetPoint = targetPoint
+	}
+}

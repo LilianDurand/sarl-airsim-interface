@@ -3,9 +3,14 @@
  */
 package io.sarl.airsim
 
+import io.sarl.airsim.math.Vector3
 import io.sarl.core.Initialize
 import io.sarl.core.Lifecycle
 import io.sarl.core.Logging
+import java.io.FileReader
+import java.util.List
+import org.json.simple.JSONObject
+import org.json.simple.parser.JSONParser
 
 /** 
  * Agent in charge of starting the other agents (initial state)
@@ -17,22 +22,31 @@ agent BootAgent {
 	uses Lifecycle, Logging
 	
 	/** The total number of agents to spawn */
-	val agentToSpawn = 5
+	val agentToSpawn = 8
+	val paramFilePath = "C:/Users/Secret/Documents/git/Airsim-settings-generator/generated/finalDestinations.json"
 
+	var data : JSONObject
+	
 	on Initialize {
+
+		var reader = new FileReader(this.paramFilePath)
+		var jsonParser = new JSONParser()
+		this.data = jsonParser.parse(reader) as JSONObject
+		
 		// Run the drone spawning strategy
 		runSpawnStrategy()
 		
 		// Spawn the simulation controller agent
-		spawn(SimulationControllerAgent)
+		spawn(SimulationControllerAgent, this.agentToSpawn)
 	}
 	
 	def runSpawnStrategy() {
-		info("Run")
+		info("Run Spawn Strategy")
 		Thread.sleep(2000)
 		
 		for (var idx = 0; idx < agentToSpawn; idx++) {
-			spawn(DroneAgent)
+			val spawnPoint = this.data.get("S" + idx) as List<Long>
+			spawn(DroneAgent, idx, new Vector3(spawnPoint.get(0).toFloat(), spawnPoint.get(1).toFloat(), spawnPoint.get(2).toFloat()))
 			Thread.sleep((1500 * Math.random()).intValue)
 		}
 	}

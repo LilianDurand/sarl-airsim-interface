@@ -53,17 +53,9 @@ agent SimulationControllerAgent {
 	/** The simulation step */
 	val simulationStepMs = 200.0f
 
-	// val pool = newLinkedList("S0", "S1", "S2", "S3", "S4", "S5")
-	val pool = newLinkedList("S0", "S1", "S2", "S3", "S4")
-	//val pool = newLinkedList("S0", "S1", "S2")
-	//val pool = newLinkedList("Alpha", "Bravo", "Charly", "Delta")
+	var pool = <String>newLinkedList()
 	
-	val affectationStrategy =
-			new FcfsFixedSizePoolAllocationStrategy([|
-				val pool = pool
-				Collections.shuffle(pool)
-				return pool
-			].apply)
+	var affectationStrategy : FcfsFixedSizePoolAllocationStrategy
 	
 	var simulationStrategy: SimulationStrategy
 
@@ -78,6 +70,20 @@ agent SimulationControllerAgent {
 	val multirotorClient = rpcClient.proxy(typeof(MultirotorClientInterface))
 	
 	on Initialize {
+		
+		setLoggingName("Simulation Controller")
+		
+		for (var i = 0; i < occurrence.parameters.get(0) as Integer; i++)
+		{
+			pool.add("S" + i)
+		}
+
+		affectationStrategy = new FcfsFixedSizePoolAllocationStrategy([|
+			val pool1 = pool
+			Collections.shuffle(pool1)
+			return pool1
+		].apply)
+		
 		// Install the simulation control capacities
 		setSkill(new AirSimSimulationControl, SimulationControlCapacity)
 		setSkill(new AirSimMultirotorControl, MultirotorSimulationControlCapacity)
@@ -143,7 +149,6 @@ agent SimulationControllerAgent {
 		info("Body: " + body)
 		influenceReactionStrategy.influenceReceived(occurrence.source) [
 			info("Propagation of takeoff for " + body)
-
 			body.takeOff
 		]
 	}

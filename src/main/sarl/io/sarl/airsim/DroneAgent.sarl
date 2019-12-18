@@ -4,20 +4,35 @@
 package io.sarl.airsim
 
 import io.sarl.airsim.behaviors.target.ReachTargetPoint3D
+import io.sarl.airsim.math.Vector3
+import io.sarl.airsim.simulation.events.ReachTargetPoint
 import io.sarl.core.Behaviors
 import io.sarl.core.Initialize
+import io.sarl.core.Logging
 
 /** 
  * Agent in charge of driving a drone
  * @author Alexandre Lombard
  * 
  */
-agent DroneAgent {
-	uses Behaviors
+agent DroneAgent 
+{
+	uses Behaviors, Logging
 	
-	on Initialize {		
+	var id : int
+	var startingPoint : Vector3
+	
+	on Initialize {
+		this.id = occurrence.parameters.get(0) as Integer
+		this.startingPoint = occurrence.parameters.get(1) as Vector3
+		setLoggingName("S" + this.id)
+		registerBehavior(new ReachTargetPoint3D(this), this.startingPoint)
 		//registerBehavior(new ForwardWithBasicAvoidance(this))
 		//registerBehavior(new ReachTargetPoint(this))
-		registerBehavior(new ReachTargetPoint3D(this))
+	}
+	
+	on ReachTargetPoint
+	{
+		registerBehavior(new ReachTargetPoint3D(this), occurrence.targetPoint)
 	}
 }
